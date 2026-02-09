@@ -1,107 +1,99 @@
-import asyncio
+import os
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
+from aiogram.filters.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from database import add_expense, get_expenses, get_stats, clear_expenses
+from aiogram.fsm.context import FSMContext
+from aiogram.filters import Command
+from aiogram import F
 
-TOKEN = "7805259495:AAGJvs67aicqZanPYlDg0Bn6kqNHA9MrDCQ"
+from database import add_expense, get_expenses, get_stats
+
+# загружаем токен
+load_dotenv()
+TOKEN = os.getenv("TOKEN")
+if TOKEN is None:
+    raise ValueError("Токен не найден! Проверьте файл .env")
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher()
-
-# FSM для добавления расхода
-class AddExpenseStates(StatesGroup):
-    waiting_amount = State()
-    waiting_category = State()
+dp = Dispatcher(storage=MemoryStorage())
 
 # кнопки
 keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="/add")],  # вот так теперь
+        [KeyboardButton(text="/add")],
         [KeyboardButton(text="/list"), KeyboardButton(text="/stats")],
         [KeyboardButton(text="/clear")]
     ],
     resize_keyboard=True
 )
 
-# /start
-@dp.message(Command("start"))
+# FSM для добавления расходов
+class AddExpense(StatesGroup):
+    waiting_for_category = State()
+    waiting_for_amount = State()
+
+# старт
+@dp.message(Command(commands=["start"]))
 async def start(msg: types.Message):
-    await msg.answer(
-        "Привет! Я бот для учета расходов 💸\n"
-        "Используй кнопки ниже для управления расходами",
-        reply_markup=keyboard
-    )
+    await msg.answer("Привет! Я твой бот для учета расходов 💰", reply_markup=keyboard)
 
-# /add кнопка — запускаем FSM
-@dp.message(Command("add"))
-async def add_start(msg: types.Message, state: FSMContext):
-    await msg.answer("Введите сумму расхода:")
-    await state.set_state(AddExpenseStates.waiting_amount)
+# добавление через кнопку /add
+@dp.message(Command(commands=["add"]))
+async def add_command(msg: types.Message, state: FSMContext):
+    await msg.answer("Напиши категорию расхода:")
+    await state.set_state(AddExpense.waiting_for_category)
 
-# получаем сумму
-@dp.message(AddExpenseStates.waiting_amount)
-async def add_amount(msg: types.Message, state: FSMContext):
-    if not msg.text.isdigit():
-        await msg.answer("Пожалуйста, введите число!")
+@dp.message(AddExpense.waiting_for_category)
+async def category_received(msg: types.Message, state: FSMContext):
+    await state.update_data(category=msg.text)
+    await msg.answer("Теперь введи сумму расхода:")
+    await state.set_state(AddExpense.waiting_for_amount)
+
+@dp.message(AddExpense.waiting_for_amount)
+async def amount_received(msg: types.Message, state: FSMContext):
+    try:
+        amount = float(msg.text.replace(",", "."))
+    except ValueError:
+        await msg.answer("Ошибка: введи число!")
         return
-    await state.update_data(amount=int(msg.text))
-    await msg.answer("Теперь введите категорию расхода:")
-    await state.set_state(AddExpenseStates.waiting_category)
-
-# получаем категорию и сохраняем
-@dp.message(AddExpenseStates.waiting_category)
-async def add_category(msg: types.Message, state: FSMContext):
     data = await state.get_data()
-    amount = data["amount"]
-    category = msg.text
+    category = data['category']
     add_expense(msg.from_user.id, amount, category)
-    await msg.answer(f"Записал расход: {amount} ₽ — {category}")
-    await state.clear()  # очищаем FSM
+    await msg.answer(f"Добавлено: {category} — {amount}₽")
+    await state.clear()
 
-# /list
-@dp.message(Command("list"))
+# список расходов
+@dp.message(Command(commands=["list"]))
 async def list_exp(msg: types.Message):
     expenses = get_expenses(msg.from_user.id)
     if not expenses:
-        await msg.answer("Пока расходов нет")
+        await msg.answer("Нет расходов")
         return
-
     text = "Твои расходы:\n"
-    for amount, category, date in expenses:
-        text += f"{date} — {amount} ₽ — {category}\n"
-
+    for amount, category, date in expenses[:10]:
+        text += f"{date[:16]} — {category}: {amount}₽\n"
     await msg.answer(text)
 
-# /stats с топ 3 категорий
-@dp.message(Command("stats"))
+# топ 3 категорий
+@dp.message(Command(commands=["stats"]))
 async def stats(msg: types.Message):
-    data = get_stats(msg.from_user.id)
-    if not data:
-        await msg.answer("Расходов пока нет")
+    stats_data = get_stats(msg.from_user.id)
+    if not stats_data:
+        await msg.answer("Нет расходов")
         return
-
-    # сортируем и берём топ 3
-    data_sorted = sorted(data, key=lambda x: x[1], reverse=True)[:3]
-
-    total = sum(item[1] for item in data)
-    text = f"Всего потрачено: {total} ₽\n\nТоп 3 категории:\n"
-    for category, amount in data_sorted:
-        text += f"{category} — {amount} ₽\n"
-
+    text = "Топ 3 категории по расходам:\n"
+    for cat, total in stats_data:
+        text += f"{cat}: {total}₽\n"
     await msg.answer(text)
 
-# /clear
-@dp.message(Command("clear"))
+# очистка базы
+@dp.message(Command(commands=["clear"]))
 async def clear(msg: types.Message):
-    clear_expenses(msg.from_user.id)
-    await msg.answer("Все расходы удалены 🗑️")
+    await msg.answer("Для 7 класса пока отключено 😅")
 
-# запуск бота
-async def main():
-    await dp.start_polling(bot)
-
+# запуск
 if __name__ == "__main__":
-    asyncio.run(main())
+    import asyncio
+    asyncio.run(dp.start_polling(bot))
