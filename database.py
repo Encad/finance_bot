@@ -37,3 +37,18 @@ def get_stats(user_id: int):
         (user_id,)
     )
     return cursor.fetchall()
+
+def get_total(user_id: int) -> float:
+    cursor.execute(
+        "SELECT SUM(amount) FROM expenses WHERE user_id = ?",
+        (user_id,)
+    )
+    total = cursor.fetchone()[0]
+    return total or 0.0
+
+def clear_expenses(user_id: int):
+    cursor.execute(
+        "DELETE FROM expenses WHERE user_id = ?",
+        (user_id,)
+    )
+    conn.commit()

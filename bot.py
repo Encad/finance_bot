@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 from aiogram import F
 
-from database import add_expense, get_expenses, get_stats
+from database import add_expense, clear_expenses, get_expenses, get_stats, get_total
 
 # загружаем токен
 load_dotenv()
@@ -24,7 +24,8 @@ keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="/add")],
         [KeyboardButton(text="/list"), KeyboardButton(text="/stats")],
-        [KeyboardButton(text="/clear")]
+        [KeyboardButton(text="/total"), KeyboardButton(text="/clear")],
+        [KeyboardButton(text="/help")]
     ],
     resize_keyboard=True
 )
@@ -39,6 +40,19 @@ class AddExpense(StatesGroup):
 async def start(msg: types.Message):
     await msg.answer("Привет! Я твой бот для учета расходов 💰", reply_markup=keyboard)
 
+@dp.message(Command(commands=["help"]))
+async def help_command(msg: types.Message):
+    text = (
+        "Команды:\n"
+        "/add — добавить расход\n"
+        "/list — последние 10 расходов\n"
+        "/stats — топ категорий\n"
+        "/total — всего потрачено\n"
+        "/clear — очистить расходы\n"
+        "/help — помощь"
+    )
+    await msg.answer(text)
+
 # добавление через кнопку /add
 @dp.message(Command(commands=["add"]))
 async def add_command(msg: types.Message, state: FSMContext):
@@ -47,7 +61,11 @@ async def add_command(msg: types.Message, state: FSMContext):
 
 @dp.message(AddExpense.waiting_for_category)
 async def category_received(msg: types.Message, state: FSMContext):
-    await state.update_data(category=msg.text)
+    category = msg.text.strip()
+    if not category:
+        await msg.answer("Категория не может быть пустой. Напиши категорию расхода:")
+        return
+    await state.update_data(category=category)
     await msg.answer("Теперь введи сумму расхода:")
     await state.set_state(AddExpense.waiting_for_amount)
 
@@ -57,6 +75,9 @@ async def amount_received(msg: types.Message, state: FSMContext):
         amount = float(msg.text.replace(",", "."))
     except ValueError:
         await msg.answer("Ошибка: введи число!")
+        return
+    if amount <= 0:
+        await msg.answer("Сумма должна быть больше нуля.")
         return
     data = await state.get_data()
     category = data['category']
@@ -83,15 +104,23 @@ async def stats(msg: types.Message):
     if not stats_data:
         await msg.answer("Нет расходов")
         return
-    text = "Топ 3 категории по расходам:\n"
+    total = get_total(msg.from_user.id)
+    text = f"Топ 3 категории по расходам (всего {total}₽):\n"
     for cat, total in stats_data:
         text += f"{cat}: {total}₽\n"
     await msg.answer(text)
 
+# всего
+@dp.message(Command(commands=["total"]))
+async def total(msg: types.Message):
+    total_amount = get_total(msg.from_user.id)
+    await msg.answer(f"Всего потрачено: {total_amount}₽")
+
 # очистка базы
 @dp.message(Command(commands=["clear"]))
 async def clear(msg: types.Message):
-    await msg.answer("Для 7 класса пока отключено 😅")
+    clear_expenses(msg.from_user.id)
+    await msg.answer("Все расходы удалены.")
 
 # запуск
 if __name__ == "__main__":
